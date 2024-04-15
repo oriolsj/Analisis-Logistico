@@ -147,20 +147,31 @@ plot(results)
 
 ```{r}
 descripciones <- unique(data$Descripción)
-results_frame <- list() 
+
+results_frame <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
+
+select(data, colnames(data)[grepl("search_string",colnames(data))]) 
+
+medicamentos <- colnames(select(data, contains("Sensibilidad")))
+
+for (i in medicamentos){ ##Factorizamos y asignamos valor a la variable categorica    unclass(data$i)
+    data[[i]] <- unclass(factor(data[[i]], exclude = NaN))
+    data[[i]][data[[i]] == 1] = NaN
+}
+
 
 for(i in descripciones){
   if (sum(data$Descripción == i) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
     next;
   }else{
-    for(j in 8:110){ #Columnas de sensibilidad
-         if( sum(is.na(data$j)) == length(data$j) ){
+    for(j in 8:110){ #Columnas correspondientes sensibilidad
+         if( sum(is.na(data$j)) == length(data$j) ){ #Si es nula la obviamos del analisis
            next;
          }else {
             data_Aux = data[data$Descripción == i,] #Dataframe auxiliar en funcion del organismo
             results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente*Sexo.del.Paciente+Peso, data_Aux, 
-                           na.action = na.omit, family =quasi()) #Modelo 
-            results_frame[[i]]<- coef(summary(results)) #Guardamos los resultados en un dataframe
+                           na.action = na.omit, family = quasi()) #Modelo 
+            results_frame[[i]][[j]]<- coef(summary(results)) #Guardamos los resultados en un dataframe
          }
       }
   }
