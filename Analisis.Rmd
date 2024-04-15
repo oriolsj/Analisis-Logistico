@@ -7,25 +7,217 @@ output: html_document
 
 ```{r}
 
-#devtools::install_github("AckerDWM/gg3D")
-library("ggplot2")
+devtools::install_github("AckerDWM/gg3D")
+
 library("gg3D")
 #library("git")
 set.seed(Sys.time())
 library(ggplot2)
 ```
 
+## Carga de los datos 
+
+Cargamos los datos que ya estan filtrados por el script de Python
 
 ```{r}
-setwd("C:/Users/otelleri/OneDrive - NTT DATA EMEAL/Escritorio/TFM/Pruebas TFM/Analisis Logilistico")
 data <- read.csv("sinrepetidos.txt", header = T, sep = "\t")
 
 #colnames(data)
 ```
+
+## Analisis estadistico 
+
+Vamos a estudiar el dataset para hacernos una idea de lo tenemos y ver que variables son las que potencialmente nos pueden ofrecer información al respecto del mismo.
 
 ```{r}
 ggplot(data) +
   aes(x = Sexo.del.Paciente, y = Edad.del.Paciente) +
   geom_boxplot(fill = "#0c4c8a") +
   theme_minimal()
+```
+
+```{r}
+shapiro.test(subset(data, Sexo.del.Paciente == "F")$Edad.del.Paciente)
+shapiro.test(subset(data, Sexo.del.Paciente == "M")$Edad.del.Paciente)
+```
+
+```{r}
+#shapiro.test(subset(data, Penicilina...Sensibilidad == "Sensible")$Edad.del.Paciente)
+
+#subset(data,Penicilina...Sensibilidad)$Edad.del.Paciente
+```
+
+### Factorizamos las sensibilidad
+
+En este ejemplo lo realizamos para la Penicilina, más tarde se generaliza al resto de medicamentos.
+
+
+```{r}
+factores<- factor(data$Penicilina...Sensibilidad, exclude = NaN)
+#factores
+```
+
+Una vez obtenido los factores (Sensible - Resistente), ahora asignamos a cada uno un valor (0 o 1). Tambien vamos a asignar un peso a cada paciente acorde a los datos de la media española para hombres y mujeres.
+
+```{r}
+data$Penicilina...Sensibilidad <- unclass(factor(data$Penicilina...Sensibilidad, exclude = NaN))
+
+length(data$Sexo.del.Paciente[data$Sexo.del.Paciente == "F"])
+
+data$Peso[data$Sexo.del.Paciente == "F"] <- rnorm(69, 63, 10)
+data$Peso[data$Sexo.del.Paciente == "M"] <- rnorm(160, 75.8, 10)
+
+data$Penicilina...Sensibilidad[data$Penicilina...Sensibilidad == 1] = NaN
+```
+
+
+```{r}
+test <- wilcox.test(data$Penicilina...Sensibilidad ~ data$Sexo.del.Paciente, alternative = "two.sided")
+test
+```
+
+Veamos si la distribution de pesos y edad es normal, o presenta algun sesgo.
+```{r}
+test.peso <- t.test(data$Peso, data$Edad.del.Paciente )
+test.peso
+```
+
+Bastante esperable para el peso ya que la hemos generado nosotros. Y la edad tambien sigue una distrbución normal.
+
+# Tener en cuenta que entre variables categoricas hay que hacer un tipo de test (wilcox). Entre variable continua y categorica otro (kruskal) y entre continuas otro (Xi cuadrado o t-test)
+
+Hagamos un estudio de las correlaciones para ver si existen algun sesgo de las variables.
+
+```{r}
+dataparacorr <- data.frame(data$Penicilina...Sensibilidad, data$Sexo.del.Paciente, data$Edad.del.Paciente, data$Peso 
+                           )
+colnames(dataparacorr) <- c("Penicilina...Sensibilidad", "Sexo.del.Paciente","Edad.del.Paciente", "Peso")
+dataparacorr <- na.omit(dataparacorr)
+
+CHIS <- lapply(dataparacorr[,-1], function(x) chisq.test(dataparacorr[,1], x ))
+do.call(rbind, CHIS)[,c(1,3)]
+```
+
+En principio, las correlaciones están por encima del valor del p-value = 0.05. Por tanto, se puede asumir con relativa seguridad que las variables son independientes en su origen. 
+
+```{r}
+dataparacorr$Sexo.del.Paciente[dataparacorr$Sexo.del.Paciente == "M"] = 0
+dataparacorr$Sexo.del.Paciente[dataparacorr$Sexo.del.Paciente == "F"] = 1
+
+dataparacorr[,2] <- as.numeric(dataparacorr[,2])
+
+WIL <- wilcox.test(dataparacorr$Penicilina...Sensibilidad, dataparacorr$Sexo.del.Paciente)
+WIL
+KRUS <- lapply(dataparacorr[,2:4],  function(x) kruskal.test( dataparacorr$Penicilina...Sensibilidad, x) )
+do.call(rbind, KRUS)[,c(1,3)]
+```
+
+
+# GLM por Antibiotico.
+
+```{r}
+results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente*Sexo.del.Paciente+Peso, data, na.action = na.omit, family =quasi())
+summary(results)
+```
+```{r}
+
+#pl1 <- ggplot(data) +
+#  aes(x = Peso, y = Edad.del.Paciente, z = Penicilina...Sensibilidad, colour= Sexo.del.Paciente) +
+#  axes_3D() + stat_3D() 
+
+#pl1
+
+```
+
+
+```{r}
+
+#ggplot(irggplot(irggplot(iris, aes(x=Petal.Width, y=Sepal.Width, z=Petal.Length, color=Species)) + 
+#  theme_void() +
+  
+```
+
+
+
+```{r}
+par(mfrow = c(2,2))
+plot(results)
+```
+# Generalizacion a todas las descripciones
+
+```{r}
+descripciones <- unique(data$Descripción)
+results_frame <- list() 
+
+for(i in descripciones){
+  if (sum(data$Descripción == i) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
+    next;
+  }else{ 
+    data_Aux = data[data$Descripción == i,] #Dataframe auxiliar en funcion del organismo
+    results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente*Sexo.del.Paciente+Peso, data_Aux, na.action = na.omit, family =quasi()) #Modelo 
+    results_frame[[i]]<- coef(summary(results)) #Guardamos los resultados en un dataframe
+  }
+}
+```
+
+```{r}
+results_frame
+```
+
+
+#Generalizacion a todas las descripciones y medicamentos
+
+```{r}
+descripciones <- unique(data$Descripción)
+results_frame <- list() 
+
+for(i in descripciones){
+  if (sum(data$Descripción == i) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
+    next;
+  }else{ 
+    data_Aux = data[data$Descripción == i,] #Dataframe auxiliar en funcion del organismo
+    results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente*Sexo.del.Paciente+Peso, data_Aux, na.action = na.omit, family =quasi()) #Modelo 
+    results_frame[[i]]<- coef(summary(results)) #Guardamos los resultados en un dataframe
+  }
+}
+```
+
+```{r}
+results_frame
+```
+
+
+```{r, echo = T, results = 'hide'}
+for (i in descripciones) {
+  print(c(i, nrow(data[ data$Descripción == i, ] ) ))
+}
+```
+
+
+```{r}
+data_Staph = data[ data$Descripción == "Staphylococcus epidermidis",]
+
+results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente+Sexo.del.Paciente+Peso, data_Staph, na.action = na.omit,family =quasi())
+summary(results)
+
+```
+
+```{r}
+par(mfrow = c(2,2))
+plot(results)
+```
+
+```{r}
+data_haem = data[ data$Descripción == "Staphylococcus haemolyticus",]
+
+results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente+Sexo.del.Paciente+Peso+Penicilina...CMI, data_haem, na.action = na.omit,family =quasi())
+summary(results)
+
+```
+
+
+Guardo el antibiograma limpio.
+```{r}
+#data <- subset(data, select = -c(Servicio))
+write.table(data, file = "Antibiogramaclean.csv" , sep = "\t")
 ```
