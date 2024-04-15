@@ -5,26 +5,27 @@ date: "2024-04-15"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r}
+
+#devtools::install_github("AckerDWM/gg3D")
+library("ggplot2")
+library("gg3D")
+#library("git")
+set.seed(Sys.time())
+library(ggplot2)
 ```
 
-## R Markdown
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+```{r}
+setwd("C:/Users/otelleri/OneDrive - NTT DATA EMEAL/Escritorio/TFM/Pruebas TFM/Analisis Logilistico")
+data <- read.csv("sinrepetidos.txt", header = T, sep = "\t")
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+#colnames(data)
 ```
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+ggplot(data) +
+  aes(x = Sexo.del.Paciente, y = Edad.del.Paciente) +
+  geom_boxplot(fill = "#0c4c8a") +
+  theme_minimal()
 ```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
