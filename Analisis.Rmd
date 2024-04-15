@@ -152,10 +152,17 @@ results_frame <- list()
 for(i in descripciones){
   if (sum(data$Descripción == i) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
     next;
-  }else{ 
-    data_Aux = data[data$Descripción == i,] #Dataframe auxiliar en funcion del organismo
-    results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente*Sexo.del.Paciente+Peso, data_Aux, na.action = na.omit, family =quasi()) #Modelo 
-    results_frame[[i]]<- coef(summary(results)) #Guardamos los resultados en un dataframe
+  }else{
+    for(j in 8:110){ #Columnas de sensibilidad
+         if( sum(is.na(data$j)) == length(data$j) ){
+           next;
+         }else {
+            data_Aux = data[data$Descripción == i,] #Dataframe auxiliar en funcion del organismo
+            results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente*Sexo.del.Paciente+Peso, data_Aux, 
+                           na.action = na.omit, family =quasi()) #Modelo 
+            results_frame[[i]]<- coef(summary(results)) #Guardamos los resultados en un dataframe
+         }
+      }
   }
 }
 ```
