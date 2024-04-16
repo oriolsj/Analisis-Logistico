@@ -58,9 +58,8 @@ Una vez obtenido los factores (Sensible - Resistente), ahora asignamos a cada un
 
 ```{r}
 factor(data$Penicilina...Sensibilidad, exclude = NaN)
-
+Penicilina <-  data$Penicilina...Sensibilidad
 data$Penicilina...Sensibilidad <- unclass(factor(data$Penicilina...Sensibilidad, exclude = NaN))
-
 
 length(data$Sexo.del.Paciente[data$Sexo.del.Paciente == "F"])
 
@@ -72,8 +71,8 @@ data$Penicilina...Sensibilidad[data$Penicilina...Sensibilidad == 1] = NaN
 
 
 ```{r}
-test <- wilcox.test(data$Penicilina...Sensibilidad ~ data$Sexo.del.Paciente, alternative = "two.sided")
-test
+#test <- wilcox.test(data$Penicilina...Sensibilidad ~ data$Sexo.del.Paciente, alternative = "two.sided")
+#test
 ```
 
 Veamos si la distribution de pesos y edad es normal, o presenta algun sesgo.
@@ -147,7 +146,7 @@ plot(results)
 
 ```{r}
 descripciones <- unique(data$Descripción)
-
+data$Penicilina...Sensibilidad <- Penicilina
 results_frame <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
 
 #select(data, colnames(data)[grepl("search_string",colnames(data))]) 
@@ -157,21 +156,22 @@ medicamentos <- colnames( select(data, contains("Sensibilidad")))
 #sapply(data[, medicamentos], unclass)
 ```
 
-```{r,  warning= FALSE}
+```{r,  warning= TRUE}
 
 #### Warnings por coercion, por tratar variables logicas a numericas ####
 
 for (j in medicamentos) {  ##Cada vez que encuentra una celda vacia problemas
-  if( sum(is.na(data[[j]])) == length(data[[j]] ) ){ #Si es nula la obviamos del analisis
+  if( sum(is.na(data[[j]])) == length(data[[j]]) ){ #Si es nula la obviamos del analisis
            next;
   }else{
+    print(j)
     data[[j]] <- lapply( data[[j]], function(cell){
     if (is.null(cell) | is.na(cell) | is.nan(cell)) {
       # Si la celda es NULL, NA or NAN return devolvemos la celda sin cambiar el valor
-      return(cell)
+      return(cell);
     } else {
       #  Cambiamos las categorias a numeros
-        return(recode(cell,
+        return( recode(cell,
                     "Sensible" = 0,
                     "Sensible EI" = 1,
                     "Resistente" = 2))
