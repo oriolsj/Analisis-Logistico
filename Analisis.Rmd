@@ -75,13 +75,6 @@ data$Penicilina...Sensibilidad[data$Penicilina...Sensibilidad == 1] = NaN
 #test
 ```
 
-Veamos si la distribution de pesos y edad es normal, o presenta algun sesgo.
-```{r}
-test.peso <- t.test(data$Peso, data$Edad.del.Paciente )
-test.peso
-```
-
-Bastante esperable para el peso ya que la hemos generado nosotros. Y la edad tambien sigue una distrbución normal.
 
 # Tener en cuenta que entre variables categoricas hay que hacer un tipo de test (wilcox). Entre variable continua y categorica otro (kruskal) y entre continuas otro (Xi cuadrado o t-test)
 
@@ -118,65 +111,31 @@ do.call(rbind, KRUS)[,c(1,3)]
 results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente*Sexo.del.Paciente+Peso, data, na.action = na.omit, family =quasi())
 summary(results)
 ```
-```{r}
-
-#pl1 <- ggplot(data) +
-#  aes(x = Peso, y = Edad.del.Paciente, z = Penicilina...Sensibilidad, colour= Sexo.del.Paciente) +
-#  axes_3D() + stat_3D() 
-
-#pl1
-
-```
-
-
-```{r}
-
-#ggplot(irggplot(irggplot(iris, aes(x=Petal.Width, y=Sepal.Width, z=Petal.Length, color=Species)) + 
-#  theme_void() +
-  
-```
-
-
 
 ```{r}
 par(mfrow = c(2,2))
 plot(results)
 ```
+
 # Generalizacion a todas las descripciones
 
 ```{r}
 descripciones <- unique(data$Descripción)
 data$Penicilina...Sensibilidad <- Penicilina
-results_frame <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
-
-#select(data, colnames(data)[grepl("search_string",colnames(data))]) 
 
 medicamentos <- colnames( select(data, contains("Sensibilidad")))
-
-#sapply(data[, medicamentos], unclass)
 ```
 
 ```{r,  warning= TRUE}
-
 #### Warnings por coercion, por tratar variables logicas a numericas ####
+
+##data$Penicilina...Sensibilidad <- unclass(factor(data$Penicilina...Sensibilidad, exclude = NaN))
 
 for (j in medicamentos) {  ##Cada vez que encuentra una celda vacia problemas
   if( sum(is.na(data[[j]])) == length(data[[j]]) ){ #Si es nula la obviamos del analisis
            next;
   }else{
-    print(j)
-    data[[j]] <- lapply( data[[j]], function(cell){
-    if (is.null(cell) | is.na(cell) | is.nan(cell)) {
-      # Si la celda es NULL, NA or NAN return devolvemos la celda sin cambiar el valor
-      return(cell);
-    } else {
-      #  Cambiamos las categorias a numeros
-        return( recode(cell,
-                    "Sensible" = 0,
-                    "Sensible EI" = 1,
-                    "Resistente" = 2))
-        }
-      })
+    data[[j]] <- unclass( factor(data[[j]], levels = c("Sensible","Sensible EI","Resistente") , exclude = c(NaN,NA,"") ))
   }
 }
 ```
@@ -192,18 +151,24 @@ for (j in medicamentos) {  ##Cada vez que encuentra una celda vacia problemas
 
 
 ```{r}
+results_frame <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
 for(i in descripciones){
-  if (sum(data$Descripción == i) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
+  if ( sum(data$Descripción == i) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
     next;
   }else{
+    results_frame[[i]] <- list()
+    data_Aux = data[ data$Descripción == i,] #Lista auxiliar en funcion del organismo
     for(j in medicamentos){ #Columnas correspondientes sensibilidad de cada medicamentos
-         if( sum(is.na(data[[j]])) == length(data[[j]]) ){ #Si es nula la obviamos del analisis
+        dim <- length(data_Aux[[j]]) 
+        numnas <-  sum(is.na(data_Aux[[j]]))
+        res <- dim - numnas 
+        if(res <= 3  ){ #Si es nula la obviamos del analisis y si solo hay un caso tambien pasamos
            next;
          }else {
-            data_Aux = data[data$Descripción == i,] #Dataframe auxiliar en funcion del organismo
-            results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente*Sexo.del.Paciente+Peso, data_Aux, 
-                           na.action = na.omit, family = quasi()) #Modelo 
-            results_frame[[i]][[j]]<- coef(summary(results)) #Guardamos los resultados en un dataframe
+            #print(j)
+            results <- glm(formula = paste0(j ," ~ Edad.del.Paciente*Sexo.del.Paciente+Peso"), data_Aux, 
+                           na.action = na.omit ,family = quasi() ) #Modelo 
+            results_frame[[i]][[j]]<- coef(summary(results)) #Guardamos los resultados en una lista de listas
          }
       }
   }
