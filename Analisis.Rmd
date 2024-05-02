@@ -149,6 +149,7 @@ for (j in medicamentos) {  ##Cada vez que encuentra una celda vacia problemas
 #}
 ```
 
+### Generalizacion a todas las descripciones y medicamentos
 
 ```{r}
 results_frame <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
@@ -181,27 +182,6 @@ results_frame
 ```
 
 
-#Generalizacion a todas las descripciones y medicamentos
-
-```{r}
-descripciones <- unique(data$Descripción)
-results_frame <- list() 
-
-for(i in descripciones){
-  if (sum(data$Descripción == i) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
-    next;
-  }else{ 
-    data_Aux = data[data$Descripción == i,] #Dataframe auxiliar en funcion del organismo
-    results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente*Sexo.del.Paciente+Peso, data_Aux, na.action = na.omit, family =quasi()) #Modelo 
-    results_frame[[i]]<- coef(summary(results)) #Guardamos los resultados en un dataframe
-  }
-}
-```
-
-```{r}
-results_frame
-```
-
 
 ```{r, echo = T, results = 'hide'}
 for (i in descripciones) {
@@ -226,9 +206,34 @@ plot(results)
 ```{r}
 data_haem = data[ data$Descripción == "Staphylococcus haemolyticus",]
 
-results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente+Sexo.del.Paciente+Peso+Penicilina...CMI, data_haem, na.action = na.omit,family =quasi())
+results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente+Sexo.del.Paciente+Peso, data_haem, na.action = na.omit,family =quasi())
 summary(results)
+```
 
+# Arbol de decisiones
+
+Primero incluimos la libreria:
+
+```{r}
+library(rpart)
+```
+
+
+Probamos con el organismo para el cual hay más pacientes. 
+
+```{r}
+data_epi = data[ data$Descripción == "Staphylococcus epidermidis",]
+
+tree_model <- rpart(Penicilina...Sensibilidad ~ Edad.del.Paciente+Sexo.del.Paciente+Peso, data = data_epi, na.action = na.omit)
+
+#summary(tree_model)
+```
+
+
+```{r}
+# Plot the tree
+plot(tree_model)
+text(tree_model, use.n = TRUE)
 ```
 
 
