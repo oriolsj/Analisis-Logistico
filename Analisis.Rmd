@@ -184,9 +184,9 @@ results_frame
 
 
 ```{r, echo = T, results = 'hide'}
-for (i in descripciones) {
-  print(c(i, nrow(data[ data$Descripción == i, ] ) ))
-}
+#for (i in descripciones) {
+#  print(c(i, nrow(data[ data$Descripción == i, ] ) ))
+#}
 ```
 
 
@@ -207,7 +207,7 @@ plot(results)
 data_haem = data[ data$Descripción == "Staphylococcus haemolyticus",]
 
 results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente+Sexo.del.Paciente+Peso, data_haem, na.action = na.omit,family =quasi())
-summary(results)
+#summary(results)
 ```
 
 # Arbol de decisiones
@@ -224,7 +224,7 @@ Probamos con el organismo para el cual hay más pacientes.
 ```{r}
 data_epi = data[ data$Descripción == "Staphylococcus epidermidis",]
 
-tree_model <- rpart(Penicilina...Sensibilidad ~ Edad.del.Paciente+Sexo.del.Paciente+Peso, data = data_epi, na.action = na.omit)
+tree_model <- rpart(Penicilina...Sensibilidad ~ Edad.del.Paciente + Sexo.del.Paciente + Peso, data = data_epi, na.action = na.omit)
 
 #summary(tree_model)
 ```
