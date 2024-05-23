@@ -219,15 +219,45 @@ library(rpart)
 ```
 
 
-Probamos con el organismo para el cual hay más pacientes. 
+Probamos con el organismo para el cual hay más pacientes. Y un tipo de medicamento con una distribución en la cual apaarecen las tres posibilidades de sensibilidad. 
 
 ```{r}
 data_epi = data[ data$Descripción == "Staphylococcus epidermidis",]
 
-tree_model <- rpart(Penicilina...Sensibilidad ~ Edad.del.Paciente + Sexo.del.Paciente + Peso, data = data_epi, na.action = na.omit)
+tree_model <- rpart(Linezolid...Sensibilidad ~ Edad.del.Paciente + Sexo.del.Paciente + Peso, data = data_epi, na.action = na.omit)
 
-#summary(tree_model)
+summary(tree_model)
 ```
+
+Ahora, podemos modificar el bucle para calcular los modelos logisticos y asi generalizar para los arboles de decisión, cambiando los nombres de las variables para guardar los resultados. 
+
+```{r}
+results_trees <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
+for(i in descripciones){
+  if ( sum(data$Descripción == i) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
+    next;
+  }else{
+    results_frame[[i]] <- list()
+    data_Aux = data[ data$Descripción == i,] #Lista auxiliar en funcion del organismo
+    for(j in medicamentos){ #Columnas correspondientes sensibilidad de cada medicamentos
+        dim <- length(data_Aux[[j]]) 
+        numnas <-  sum(is.na(data_Aux[[j]]))
+        res <- dim - numnas 
+        if(res <= 3  ){ #Si es nula la obviamos del analisis y si solo hay un caso tambien pasamos
+           next;
+         }else {
+            #print(j)
+            tree_model <- rpart(paste0(j ," ~ Edad.del.Paciente*Sexo.del.Paciente+Peso"), data = data_Aux, na.action = na.omit)
+            
+            results_trees[[i]][[j]]<- tree_model #Guardamos los resultados en una lista de listas
+         }
+      }
+  }
+}
+
+
+```
+
 
 
 ```{r}
