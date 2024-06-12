@@ -10,6 +10,7 @@ library(dplyr) ## Para los select
 #library("git")
 set.seed(Sys.time())
 library(ggplot2) #Para plotear
+library(pROC)
 ```
 
 ## Carga de los datos 
@@ -51,7 +52,7 @@ En este ejemplo lo realizamos para la Penicilina, más tarde se generaliza al re
 
 ```{r}
 factores<- factor(data$Penicilina...Sensibilidad, exclude = NaN)
-#factores
+factores
 ```
 
 Una vez obtenido los factores (Sensible - Resistente), ahora asignamos a cada uno un valor (0 o 1). Tambien vamos a asignar un peso a cada paciente acorde a los datos de la media española para hombres y mujeres.
@@ -108,9 +109,92 @@ do.call(rbind, KRUS)[,c(1,3)]
 # GLM por Antibiotico.
 
 ```{r}
-results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente*Sexo.del.Paciente+Peso, data, na.action = na.omit, family =quasi())
+results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente+Sexo.del.Paciente+Peso , data, na.action = na.omit, family =quasi())
 summary(results)
 ```
+
+```{r}
+dataAuxiliar <- data.frame(data$Penicilina...Sensibilidad, data$Sexo.del.Paciente, data$Edad.del.Paciente, data$Peso)
+dataAuxiliar <- na.omit(dataAuxiliar)
+
+results <- glm(data.Penicilina...Sensibilidad ~ data.Edad.del.Paciente+data.Sexo.del.Paciente+data.Peso , dataAuxiliar, family =quasi())
+
+#results$fitted.values
+threshold_2 <- 2.5
+
+predictions <- dataAuxiliar %>% 
+  mutate(pred.fit = results$fitted.values,
+    predicted_class = if_else(pred.fit > threshold_2, 3, 2),
+    correct = if_else( predicted_class == data.Penicilina...Sensibilidad, 'correct', 'incorrect')
+  )
+
+# Step 4: Construct the confusion matrix
+confusion_matrix <- table(predictions$data.Penicilina...Sensibilidad, predictions$predicted_class)
+tn <- confusion_matrix["2", "2"]  # True Negatives
+tp <- confusion_matrix["3", "3"]  # True Positives
+fn <- confusion_matrix["3", "2"]  # False Negatives
+fp <- confusion_matrix["2", "3"]  # False Positives
+
+# Calculate accuracy
+accuracy <- (tp + tn) / (tp + tn + fp + fn)
+
+# Calculate precision
+precision <- tp / (tp + fp)
+
+# Calculate recall
+recall <- tp / (tp + fn)
+cat("Metrics:\n")
+cat("Accuracy: ", accuracy, "\t", "Precision: ", precision, "\t", "Recall: ", recall, "\n")
+
+# Create a named list for better clarity
+confusion_matrix_named <- matrix(c(tn, fp, fn, tp),
+                                 nrow = 2,
+                                 dimnames = list('Actual' = c('Resistente', 'Sensible'),
+                                                 'Predicted' = c('Resistente', 'Sensible')))
+
+# Print the confusion matrix with names
+cat("Confusion Matrix (named):\n")
+print(confusion_matrix_named)
+```
+
+```{r}
+roc_curve <- roc(predictions$data.Penicilina...Sensibilidad, predictions$pred.fit, levels = c(2, 3), direction = "<")
+auroc <- auc(roc_curve)
+
+# Print the AUROC
+cat("AUROC: ", auroc, "\n")
+
+# Optionally, plot the ROC curve
+plot(roc_curve, main = "ROC Curve", col = "blue", lwd = 2)
+abline(a = 0, b = 1, lty = 2, col = "red")  # Diagonal line for reference
+```
+
+```{r}
+new_obs <- data.frame(data.Edad.del.Paciente = c(42,65), data.Sexo.del.Paciente = c("M","F"), data-Peso = c(65, 53) )
+
+
+predict(
+  results, 
+  newdata = new_obs,
+  type = 'response'
+)
+```
+
+
+
+```{r}
+#install.packages("gtsummary")
+library(gtsummary)
+
+results %>% 
+  tbl_regression(intercept=TRUE, conf.level=0.9) %>%
+  add_glance_source_note() %>%
+  add_global_p() %>%
+  add_q() 
+#predict(modelo_results,dataset.test)
+```
+
+
 
 ```{r}
 par(mfrow = c(2,2))
@@ -248,14 +332,11 @@ for(i in descripciones){
          }else {
             #print(j)
             tree_model <- rpart(paste0(j ," ~ Edad.del.Paciente*Sexo.del.Paciente+Peso"), data = data_Aux, na.action = na.omit)
-            
             results_trees[[i]][[j]]<- tree_model #Guardamos los resultados en una lista de listas
          }
       }
   }
 }
-
-
 ```
 
 
@@ -266,9 +347,41 @@ plot(tree_model)
 text(tree_model, use.n = TRUE)
 ```
 
+### Redes neuronales 
+
+Vamos ahora a proponer redes neuronales para resolver el problema. Usaremos la libreria h2o que implementa redes neuronales. 
+
+```{r}
+library(h2o)
+
+h2o.init()
+```
+
+
+```{r}
+modelo_dl_200_200 <- h2o.deeplearning(
+                      x = c("Edad.del.Paciente", "Sexo.del.Paciente", "Peso"),
+                      y = "Linezolid...Sensibilidad",
+                      distribution = "multinomial",
+                      training_frame = datos_espiral_h2o,
+                      standardize = TRUE,
+                      activation = "Rectifier",
+                      hidden = c(200, 200),
+                      stopping_rounds = 0,
+                      epochs = 1000,
+                      seed = 123,
+                      model_id = "modelo_dl_200_200"
+                    )
+```
+
+
 
 Guardo el antibiograma limpio.
 ```{r}
 #data <- subset(data, select = -c(Servicio))
 write.table(data, file = "Antibiogramaclean.csv" , sep = "\t")
 ```
+
+
+
+
