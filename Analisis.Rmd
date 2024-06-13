@@ -128,32 +128,36 @@ predictions <- dataAuxiliar %>%
     correct = if_else( predicted_class == data.Penicilina...Sensibilidad, 'correct', 'incorrect')
   )
 
-# Step 4: Construct the confusion matrix
+# Construimos la  confusion matrix
 confusion_matrix <- table(predictions$data.Penicilina...Sensibilidad, predictions$predicted_class)
 tn <- confusion_matrix["2", "2"]  # True Negatives
 tp <- confusion_matrix["3", "3"]  # True Positives
 fn <- confusion_matrix["3", "2"]  # False Negatives
 fp <- confusion_matrix["2", "3"]  # False Positives
 
-# Calculate accuracy
+# Calculate accuracy La métrica de precisión es utilizada para poder saber qué porcentaje de valores que se han clasificado como positivos son realmente positivos.
 accuracy <- (tp + tn) / (tp + tn + fp + fn)
 
-# Calculate precision
+# Calculate precision La métrica de precisión es utilizada para poder saber qué porcentaje de valores que se han clasificado como positivos son realmente positivos.
 precision <- tp / (tp + fp)
 
-# Calculate recall
+# Calculamos el recall La métrica de recall, también conocida como el ratio de verdaderos positivos, es utilizada para saber cuantos valores positivos son correctamente clasificados.
 recall <- tp / (tp + fn)
-cat("Metrics:\n")
-cat("Accuracy: ", accuracy, "\t", "Precision: ", precision, "\t", "Recall: ", recall, "\n")
 
-# Create a named list for better clarity
+#F1 score
+
+F1 <- 2 * ((recall * precision)/(recall + precision))
+
+cat("Metricas:\n")
+cat("Accuracy: ", accuracy, "\t", "Precision: ", precision, "\t", "Recall: ", recall, "\t", "F1 Score: ", F1, "\n")
+
+# Cambiamos nombres a las columnas de la confusion matrix
 confusion_matrix_named <- matrix(c(tn, fp, fn, tp),
                                  nrow = 2,
                                  dimnames = list('Actual' = c('Resistente', 'Sensible'),
                                                  'Predicted' = c('Resistente', 'Sensible')))
 
-# Print the confusion matrix with names
-cat("Confusion Matrix (named):\n")
+#La printeamos
 print(confusion_matrix_named)
 ```
 
