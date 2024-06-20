@@ -6,6 +6,14 @@ output: html_document
 ---
 
 ```{r}
+#install.packages("gtsummary")
+#install.packages("xgboost")
+#install.packages("caret")
+#install.packages("tidyverse")
+library(gtsummary)
+library(tidyverse)
+library(caret)
+library(xgboost)
 library(dplyr) ## Para los select
 #library("git")
 set.seed(Sys.time())
@@ -113,6 +121,11 @@ results <- glm(Penicilina...Sensibilidad ~ Edad.del.Paciente+Sexo.del.Paciente+P
 summary(results)
 ```
 
+
+
+## Construccion de la confusion matrix y metricas para un antibiotico
+
+
 ```{r}
 dataAuxiliar <- data.frame(data$Penicilina...Sensibilidad, data$Sexo.del.Paciente, data$Edad.del.Paciente, data$Peso)
 dataAuxiliar <- na.omit(dataAuxiliar)
@@ -144,6 +157,15 @@ precision <- tp / (tp + fp)
 # Calculamos el recall La métrica de recall, también conocida como el ratio de verdaderos positivos, es utilizada para saber cuantos valores positivos son correctamente clasificados.
 recall <- tp / (tp + fn)
 
+Sensitivity <- recall
+
+Specificity <- tn/(tn+fp)
+
+#Cohen’s kappa  compares how well the binary classifier performs compared to the randomized accuracy  it can be applied to measure the agreement between the predicted and the real classes.
+
+p_e <- ((tp+fn)*(tp+fp) + (tn+fp)*(tn+fn))/((tp+fp+tn+fn)**2)
+kappa <- (accuracy-p_e)/(1-p_e)
+
 #F1 score
 
 F1 <- 2 * ((recall * precision)/(recall + precision))
@@ -156,10 +178,61 @@ confusion_matrix_named <- matrix(c(tn, fp, fn, tp),
                                  nrow = 2,
                                  dimnames = list('Actual' = c('Resistente', 'Sensible'),
                                                  'Predicted' = c('Resistente', 'Sensible')))
-
-#La printeamos
-print(confusion_matrix_named)
 ```
+
+```{r}
+# Function to draw the confusion matrix
+draw_confusion_matrix <- function(cm) {
+  layout(matrix(c(1,1,2)))
+  par(mar=c(2,2,2,2))
+  plot(c(100, 345), c(300, 450), type = "n", xlab="", ylab="", xaxt='n', yaxt='n')
+  title('CONFUSION MATRIX', cex.main=2)
+  
+  # Create the matrix 
+  rect(150, 430, 240, 370, col='#3F97D0')
+  text(195, 435, 'Resistente', cex=1.2)
+  rect(250, 430, 340, 370, col='#F7AD50')
+  text(295, 435, 'Sensible', cex=1.2)
+  text(125, 370, 'Predicted', cex=1.3, srt=90, font=2)
+  text(245, 450, 'Actual', cex=1.3, font=2)
+  rect(150, 305, 240, 365, col='#F7AD50')
+  rect(250, 305, 340, 365, col='#3F97D0')
+  text(140, 400, 'Resistente', cex=1.2, srt=90)
+  text(140, 335, 'Sensible', cex=1.2, srt=90)
+  
+  # Add in the confusion matrix results 
+  res <- as.numeric(cm)
+  text(195, 400, res[1], cex=1.6, font=2, col='white')
+  text(195, 335, res[2], cex=1.6, font=2, col='white')
+  text(295, 400, res[3], cex=1.6, font=2, col='white')
+  text(295, 335, res[4], cex=1.6, font=2, col='white')
+  
+  # Add in the specifics 
+  plot(c(100, 0), c(100, 0), type = "n", xlab="", ylab="", main = "DETAILS", xaxt='n', yaxt='n')
+  text(10, 85, "Sensitivity", cex=1.2, font=2)
+  text(10, 70, round(Sensitivity, 3), cex=1.2)
+  text(30, 85, "Specifity", cex=1.2, font=2)
+  text(30, 70, round(Specificity, 3), cex=1.2)
+  text(50, 85, "Precision", cex=1.2, font=2)
+  text(50, 70, round(precision, 3), cex=1.2)
+  text(70, 85, "recall", cex=1.2, font=2)
+  text(70, 70, round(recall, 3), cex=1.2)
+  text(90, 85, "F1 score", cex=1.2, font=2)
+  text(90, 70, round(F1, 3), cex=1.2)
+  
+  # Add in the accuracy information 
+  text(30, 35, "Accuracy", cex=1.5, font=2)
+  text(30, 20, round(accuracy, 3), cex=1.4)
+  text(60, 35, "Cohen's Kappa", cex=1.5, font=2)
+  text(60, 20, round(kappa, 3), cex=1.4)
+}
+
+# Draw the confusion matrix
+draw_confusion_matrix(confusion_matrix_named)
+```
+
+
+### Aerea debajo de la curva Roc
 
 ```{r}
 roc_curve <- roc(predictions$data.Penicilina...Sensibilidad, predictions$pred.fit, levels = c(2, 3), direction = "<")
@@ -167,15 +240,33 @@ auroc <- auc(roc_curve)
 
 # Print the AUROC
 cat("AUROC: ", auroc, "\n")
+# Create a data frame from the ROC curve
+roc_df <- data.frame(
+  tpr = roc_curve$sensitivities,  # True Positive Rate
+  fpr = 1 - roc_curve$specificities  # False Positive Rate
+)
 
-# Optionally, plot the ROC curve
-plot(roc_curve, main = "ROC Curve", col = "blue", lwd = 2)
-abline(a = 0, b = 1, lty = 2, col = "red")  # Diagonal line for reference
+# Plot the ROC curve using ggplot2
+pl1 <- ggplot(roc_df, aes(x = fpr, y = tpr)) +
+  geom_line(color = "blue") +
+  geom_abline(linetype = "dashed", color = "red") +
+  labs(
+    title = "ROC Curve",
+    x = "False Positive Rate",
+    y = "True Positive Rate"
+  )
+
+# Display the plot
+pl1
 ```
 
-```{r}
-new_obs <- data.frame(data.Edad.del.Paciente = c(42,65), data.Sexo.del.Paciente = c("M","F"), data-Peso = c(65, 53) )
 
+### Prediccion con datos inventados 
+
+
+```{r}
+new_obs <- data.frame(data.Edad.del.Paciente = c(42,65), data.Sexo.del.Paciente = c("M","F"),
+                      data.Peso = c(65, 53) )
 
 predict(
   results, 
@@ -187,9 +278,6 @@ predict(
 
 
 ```{r}
-#install.packages("gtsummary")
-library(gtsummary)
-
 results %>% 
   tbl_regression(intercept=TRUE, conf.level=0.9) %>%
   add_glance_source_note() %>%
