@@ -182,11 +182,11 @@ confusion_matrix_named <- matrix(c(tn, fp, fn, tp),
 
 ```{r}
 # Function to draw the confusion matrix
-draw_confusion_matrix <- function(cm) {
+draw_confusion_matrix <- function(cm, name) {
   layout(matrix(c(1,1,2)))
   par(mar=c(2,2,2,2))
   plot(c(100, 345), c(300, 450), type = "n", xlab="", ylab="", xaxt='n', yaxt='n')
-  title('CONFUSION MATRIX', cex.main=2)
+  title(paste0('CONFUSION MATRIX of ', name), cex.main=2)
   
   # Create the matrix 
   rect(150, 430, 240, 370, col='#3F97D0')
@@ -206,31 +206,42 @@ draw_confusion_matrix <- function(cm) {
   text(195, 335, res[2], cex=1.6, font=2, col='white')
   text(295, 400, res[3], cex=1.6, font=2, col='white')
   text(295, 335, res[4], cex=1.6, font=2, col='white')
-  
+  tn <- cm[1, 1]  # True Negatives
+  tp <- cm[2, 2]  # True Positives
+  fn <- cm[2, 1]  # False Negatives
+  fp <- cm[1, 2]  # False Positives
+  Acc <- (tp + tn) / (tp + tn + fp + fn)
+  Prec <- tp / (tp + fp)
+  Rec <- tp / (tp + fn)
+  Sens <- recall
+  Spec <- tn/(tn+fp)
+  p_e <- ((tp+fn)*(tp+fp) + (tn+fp)*(tn+fn))/((tp+fp+tn+fn)**2)
+  kappa <- (accuracy-p_e)/(1-p_e)
+  F1 <- 2 * ((Rec * Prec)/(Rec + Prec))
+
   # Add in the specifics 
   plot(c(100, 0), c(100, 0), type = "n", xlab="", ylab="", main = "DETAILS", xaxt='n', yaxt='n')
   text(10, 85, "Sensitivity", cex=1.2, font=2)
-  text(10, 70, round(Sensitivity, 3), cex=1.2)
+  text(10, 70, round(Sens, 3), cex=1.2)
   text(30, 85, "Specifity", cex=1.2, font=2)
-  text(30, 70, round(Specificity, 3), cex=1.2)
+  text(30, 70, round(Spec, 3), cex=1.2)
   text(50, 85, "Precision", cex=1.2, font=2)
-  text(50, 70, round(precision, 3), cex=1.2)
+  text(50, 70, round(Prec, 3), cex=1.2)
   text(70, 85, "recall", cex=1.2, font=2)
-  text(70, 70, round(recall, 3), cex=1.2)
+  text(70, 70, round(Rec, 3), cex=1.2)
   text(90, 85, "F1 score", cex=1.2, font=2)
   text(90, 70, round(F1, 3), cex=1.2)
   
   # Add in the accuracy information 
   text(30, 35, "Accuracy", cex=1.5, font=2)
-  text(30, 20, round(accuracy, 3), cex=1.4)
+  text(30, 20, round(Acc, 3), cex=1.4)
   text(60, 35, "Cohen's Kappa", cex=1.5, font=2)
   text(60, 20, round(kappa, 3), cex=1.4)
 }
 
 # Draw the confusion matrix
-draw_confusion_matrix(confusion_matrix_named)
+draw_confusion_matrix(confusion_matrix, "Penicilina")
 ```
-
 
 ### Aerea debajo de la curva Roc
 
@@ -257,7 +268,7 @@ pl1 <- ggplot(roc_df, aes(x = fpr, y = tpr)) +
   )
 
 # Display the plot
-pl1
+#pl1
 ```
 
 
@@ -329,32 +340,60 @@ for (j in medicamentos) {  ##Cada vez que encuentra una celda vacia problemas
 
 ```{r}
 results_frame <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
+predictions <- list()
+confusions_matrices <- list()
+
 for(i in descripciones){
   if ( sum(data$Descripción == i) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
     next;
   }else{
+    print(i)
     results_frame[[i]] <- list()
     data_Aux = data[ data$Descripción == i,] #Lista auxiliar en funcion del organismo
     for(j in medicamentos){ #Columnas correspondientes sensibilidad de cada medicamentos
+      
         dim <- length(data_Aux[[j]]) 
         numnas <-  sum(is.na(data_Aux[[j]]))
         res <- dim - numnas 
-        if(res <= 3  ){ #Si es nula la obviamos del analisis y si solo hay un caso tambien pasamos
+        data_Aux_j <- data_Aux[!is.na(data_Aux[[j]]), ] # Quitamos filas sin sensibilidad de ese medicamento
+        dataAuxiliar <- data.frame( a = data_Aux_j[[j]], 
+                                    Sexo.del.Paciente= data_Aux_j$Sexo.del.Paciente,  
+                                    Edad.del.Paciente= data_Aux_j$Edad.del.Paciente, 
+                                    Peso= data_Aux_j$Peso)
+        
+        names(dataAuxiliar)[names(dataAuxiliar) == 'a'] <- paste0(j)
+        #dataAuxiliar <- dataAuxiliar %>% rename_at('a', ~ deparse(j))
+        if(res <= 10){ #Si es nula la obviamos del analisis y si hay menos de 10 casos tambien obviamos el analisis
            next;
          }else {
             #print(j)
-            results <- glm(formula = paste0(j ," ~ Edad.del.Paciente*Sexo.del.Paciente+Peso"), data_Aux, 
-                           na.action = na.omit ,family = quasi() ) #Modelo 
+            results <- glm(formula = paste0(j ," ~ Edad.del.Paciente*Sexo.del.Paciente+Peso"), data_Aux_j, 
+                           family = quasi() ) #Modelo 
+            
             results_frame[[i]][[j]]<- coef(summary(results)) #Guardamos los resultados en una lista de listas
-         }
-      }
+            
+            predictions[[i]][[j]] <- dataAuxiliar %>% 
+                          mutate(pred.fit = results$fitted.values,
+                            predicted_class = if_else(pred.fit > 2.0, 3, 2), #threshold is 2 
+                            correct = if_else( predicted_class == data_Aux_j[[j]], 'correct', 'incorrect')
+                          )
+
+            # Construimos la  confusion matrix
+            
+            cm <- matrix(0, nrow = 2, ncol = 2, dimnames = list(Actual = c('2', '3'), Predicted = c('2', '3')))
+            
+            # Populate the confusion matrix
+            actual <- factor(predictions[[i]][[j]][[j]], levels = c(2, 3))
+            predicted <- factor(predictions[[i]][[j]]$predicted_class, levels = c(2, 3))
+            cm <- table(actual, predicted)
+            
+            confusions_matrices[[i]][[j]] <- cm
+            draw_confusion_matrix(cm, j)
+        }
+    }
+    cat("\n")
   }
 }
-```
-
-
-```{r}
-results_frame
 ```
 
 
