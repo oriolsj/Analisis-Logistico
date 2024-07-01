@@ -351,10 +351,6 @@ for(i in descripciones){
     results_frame[[i]] <- list()
     data_Aux = data[ data$Descripción == i,] #Lista auxiliar en funcion del organismo
     for(j in medicamentos){ #Columnas correspondientes sensibilidad de cada medicamentos
-      
-        dim <- length(data_Aux[[j]]) 
-        numnas <-  sum(is.na(data_Aux[[j]]))
-        res <- dim - numnas 
         data_Aux_j <- data_Aux[!is.na(data_Aux[[j]]), ] # Quitamos filas sin sensibilidad de ese medicamento
         dataAuxiliar <- data.frame( a = data_Aux_j[[j]], 
                                     Sexo.del.Paciente= data_Aux_j$Sexo.del.Paciente,  
@@ -363,7 +359,7 @@ for(i in descripciones){
         
         names(dataAuxiliar)[names(dataAuxiliar) == 'a'] <- paste0(j)
         #dataAuxiliar <- dataAuxiliar %>% rename_at('a', ~ deparse(j))
-        if(res <= 10){ #Si es nula la obviamos del analisis y si hay menos de 10 casos tambien obviamos el analisis
+        if( length(dataAuxiliar$Peso) < 20){ #Si hay menos de 10 casos tambien obviamos el analisis
            next;
          }else {
             #print(j)
@@ -448,6 +444,9 @@ Ahora, podemos modificar el bucle para calcular los modelos logisticos y asi gen
 
 ```{r}
 results_trees <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
+
+trees_confusions_matrices <- list()
+
 for(i in descripciones){
   if ( sum(data$Descripción == i) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
     next;
@@ -455,15 +454,40 @@ for(i in descripciones){
     results_frame[[i]] <- list()
     data_Aux = data[ data$Descripción == i,] #Lista auxiliar en funcion del organismo
     for(j in medicamentos){ #Columnas correspondientes sensibilidad de cada medicamentos
-        dim <- length(data_Aux[[j]]) 
-        numnas <-  sum(is.na(data_Aux[[j]]))
-        res <- dim - numnas 
-        if(res <= 3  ){ #Si es nula la obviamos del analisis y si solo hay un caso tambien pasamos
+        data_Aux_j <- data_Aux[!is.na(data_Aux[[j]]), ] # Quitamos filas sin sensibilidad de ese medicamento
+        dataAuxiliar <- data.frame( a = data_Aux_j[[j]], 
+                                    Sexo.del.Paciente= data_Aux_j$Sexo.del.Paciente,  
+                                    Edad.del.Paciente= data_Aux_j$Edad.del.Paciente, 
+                                    Peso = data_Aux_j$Peso)
+        
+        names(dataAuxiliar)[names(dataAuxiliar) == 'a'] <- paste0(j)
+        #dataAuxiliar <- dataAuxiliar %>% rename_at('a', ~ deparse(j))
+        if( length(dataAuxiliar$Peso) < 20){ #Si hay menos de 10 casos tambien obviamos el analisis
            next;
          }else {
             #print(j)
-            tree_model <- rpart(paste0(j ," ~ Edad.del.Paciente*Sexo.del.Paciente+Peso"), data = data_Aux, na.action = na.omit)
+            tree_model <- rpart(formula = paste0(j ," ~ Edad.del.Paciente+Sexo.del.Paciente+Peso"), data = dataAuxiliar)
             results_trees[[i]][[j]]<- tree_model #Guardamos los resultados en una lista de listas
+            
+            
+            
+            predictions[[i]][[j]] <- dataAuxiliar %>% 
+                          mutate(pred.fit = predict( tree_model, dataAuxiliar),
+                            predicted_class = if_else(pred.fit > 2.0, 3, 2), #threshold is 2 
+                            correct = if_else( predicted_class == dataAuxiliar[[j]], 'correct', 'incorrect')
+                          )
+
+            # Construimos la  confusion matrix
+            
+            cm <- matrix(0, nrow = 2, ncol = 2, dimnames = list(Actual = c('2', '3'), Predicted = c('2', '3')))
+            
+            # Populate the confusion matrix
+            actual <- factor(predictions[[i]][[j]][[j]], levels = c(2, 3))
+            predicted <- factor(predictions[[i]][[j]]$predicted_class, levels = c(2, 3))
+            cm <- table(actual, predicted)
+            
+            trees_confusions_matrices[[i]][[j]] <- cm
+            draw_confusion_matrix(cm, j)
          }
       }
   }
@@ -490,16 +514,21 @@ h2o.init()
 
 
 ```{r}
+data_Aux.hex <- as.h2o(data_Aux)
+
+
+data_Aux.hex
+
 modelo_dl_200_200 <- h2o.deeplearning(
                       x = c("Edad.del.Paciente", "Sexo.del.Paciente", "Peso"),
                       y = "Linezolid...Sensibilidad",
                       distribution = "multinomial",
-                      training_frame = datos_espiral_h2o,
+                      training_frame = data_Aux.hex,
                       standardize = TRUE,
                       activation = "Rectifier",
                       hidden = c(200, 200),
                       stopping_rounds = 0,
-                      epochs = 1000,
+                      epochs = 100,
                       seed = 123,
                       model_id = "modelo_dl_200_200"
                     )
