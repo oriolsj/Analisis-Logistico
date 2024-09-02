@@ -514,16 +514,23 @@ h2o.init()
 
 
 ```{r}
-data_Aux.hex <- as.h2o(data_Aux)
+dataH20 <- data.frame( Edad.del.Paciente = data$Edad.del.Paciente,
+                       Sexo.del.Paciente = data$Sexo.del.Paciente,
+                       Peso = data$Peso, 
+                       Penicilina...Sensibilidad = data$Penicilina...Sensibilidad)
 
+dataH20 <- dataH20[!is.na(dataH20[["Penicilina...Sensibilidad"]]), ] 
 
-data_Aux.hex
+dataH20.hex <- as.h2o(dataH20)
+
+#data_Aux.hex[["Penicilina...Sensibilidad"]] <- as.factor( data_Aux.hex[["Penicilina...Sensibilidad"]])
+
 
 modelo_dl_200_200 <- h2o.deeplearning(
                       x = c("Edad.del.Paciente", "Sexo.del.Paciente", "Peso"),
-                      y = "Linezolid...Sensibilidad",
+                      y = "Penicilina...Sensibilidad",
                       distribution = "multinomial",
-                      training_frame = data_Aux.hex,
+                      training_frame = dataH20.hex,
                       standardize = TRUE,
                       activation = "Rectifier",
                       hidden = c(200, 200),
