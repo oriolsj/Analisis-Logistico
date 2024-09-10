@@ -1,0 +1,792 @@
+---
+title: "Analisis v2"
+author: "Oriol Tellería Serrano"
+date: "2024-09-09"
+output: html_document
+---
+
+```{r}
+library(gtsummary)
+library(tidyverse)
+library(caret)
+library(xgboost)
+library(dplyr) ## Para los select
+library(caret)
+library(xtable)
+library(class)
+library(h2o)
+h2o.init()
+seed <- set.seed(Sys.time())
+library(ggplot2) #Para plotear
+library(pROC)
+library(multiROC)
+```
+
+## Carga de los datos 
+
+Cargamos los datos que ya estan filtrados por el script de Python
+
+```{r}
+data.test <- read.csv("sinrepetidos1000.txt", header = T, sep = "\t")
+
+nF.test <- length(data.test$Sexo.del.Paciente[data.test$Sexo.del.Paciente == "F"])
+nM.test <- length(data.test$Sexo.del.Paciente) - nF.test
+
+data.test$IMC[data.test$Sexo.del.Paciente == "F"] <- rnorm(nF.test, 21.75, 5)
+data.test$IMC[data.test$Sexo.del.Paciente == "M"] <- rnorm(nM.test, 27.5, 5)
+```
+
+
+```{r}
+data.train <- read.csv("sinrepetidos10000.txt", header = T, sep = "\t")
+
+nF.train <- length(data.train$Sexo.del.Paciente[data.train$Sexo.del.Paciente == "F"])
+nM.train <- length(data.train$Sexo.del.Paciente) - nF.train
+
+data.train$IMC[data.train$Sexo.del.Paciente == "F"] <- rnorm(nF.train, 21.75, 5)
+data.train$IMC[data.train$Sexo.del.Paciente == "M"] <- rnorm(nM.train, 27.5, 5)
+```
+
+
+```{r}
+descripciones <- unique(data.test$Descripción)
+medicamentos <- colnames( select(data.test, contains("Sensibilidad")))
+```
+
+
+```{r,  warning= TRUE}
+#### Warnings por coercion, por tratar variables logicas a numericas ####
+for (j in medicamentos) {  ##Cada vez que encuentra una celda vacia problemas
+  if( sum(is.na(data.test[[j]])) == length(data.test[[j]]) ){ #Si es nula la obviamos del analisis
+           next;
+  }else{
+    data.test[[j]] <- unclass( factor(data.test[[j]],
+                                 levels = c("Sensible", "Sensible EI","Resistente") , 
+                                 exclude = c(NaN, NA,"") ))
+ }
+}
+
+
+for (j in medicamentos) {  ##Cada vez que encuentra una celda vacia problemas
+  if( sum(is.na(data.train[[j]])) == length(data.train[[j]]) ){ #Si es nula la obviamos del analisis
+           next;
+  }else{
+    data.train[[j]] <- unclass( factor(data.train[[j]],
+                                 levels = c("Sensible", "Sensible EI","Resistente") , 
+                                 exclude = c(NaN, NA,"") ))
+ }
+}
+```
+
+### Draw confusion matrix
+```{r}
+draw_confusion_matrix <- function(cm, name, description, model) {
+  cm_df <- as.data.frame(cm)
+  pl1 <- ggplot(data = cm_df, aes(x = predicted, y = actual, fill = Freq)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = Freq), color = "white", size = 6) +
+    scale_fill_gradient(low = "#3F97D0", high = "#F7AD50") +
+    labs(title = paste0("Confusion Matrix of ", name), x = "Predicted", y = "Actual") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5, size = 18),
+          axis.title.x = element_text(size = 14),
+          axis.title.y = element_text(size = 14),
+          axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size = 12))
+  
+  ggsave(filename = paste0(paste0("Imagenes_confusionMatrix", model, "/"), "ROC_", description, "_", name, ".png"), 
+             plot = pl1, width = 8, height = 6, dpi = 300)
+
+}
+```
+
+### Funcion for metrics
+
+```{r}
+compute_metrics <- function(cm, name){
+    n = sum(cm) # number of instances
+    nc = nrow(cm) # number of classes
+    diag = diag(cm) # number of correctly classified instances per class true positives
+    rowsums = apply(cm, 1, sum) # number of instances per class
+    colsums = apply(cm, 2, sum) # number of predictions per class
+    p = rowsums / n # distribution of instances over the actual classes
+    q = colsums / n # distribution of instances over the predicted classes
+    
+    accuracy <- sum(diag)/n
+    precision = diag / colsums 
+    recall = diag / rowsums 
+    F1 = 2 * precision * recall / (precision + recall)
+    expAccuracy = sum(p*q)
+    kappa = (accuracy - expAccuracy) / (1 - expAccuracy)
+    
+    #data.frame(precision, recall, F1) 
+    Sensitivity <- recall
+    
+    #Macros 
+    macro_precision <- mean(precision, na.rm = T)
+    macro_Recall <- mean(recall, na.rm = T)
+    macro_F1 <- mean(F1, na.rm = T)
+    
+    #Micros
+    micro_precision <- sum(diag)/sum(colsums)
+    micro_Recall <- sum(diag)/sum(rowsums)
+    micro_F1 <- 2 * micro_precision * micro_Recall / (micro_precision + micro_Recall)
+    
+    # Weighthed averages
+    Weighted_Precision <- sum(precision*rowsums, na.rm = T)/ sum(rowsums, na.rm = T)
+    Weighted_Recall <- sum(recall*rowsums, na.rm = T)/ sum(rowsums, na.rm = T)
+    Weighted_F1 <- sum(F1*rowsums, na.rm = T)/sum(rowsums, na.rm = T)
+    
+    metrics_df <- data.frame(
+      Metric = c("Precision", "Recall", "F1 Score", "Accuracy", "Cohen's Kappa"),
+      Macro = c(round(macro_precision, 3), round(macro_Recall, 3), round(macro_F1, 3), NA, NA),
+      Micro = c(round(micro_precision, 3), round(micro_Recall, 3), round(micro_F1, 3), round(accuracy, 3), round(kappa, 3)),
+      Weighted = c(round(Weighted_Precision, 3), round(Weighted_Recall, 3), round(Weighted_F1, 3), NA, NA)
+    )
+    return(metrics_df)
+}
+
+```
+
+
+```{r}
+roc_auc_df <- data.frame()
+
+computerocurve <- function(predictions, description, model, medication)  {
+  # Extract unique levels from the target true labels in data
+  unique_levels <- sort(unique(predictions$Sensibilidad))
+  # Case 1: Binary Classification
+  
+    if (length(unique_levels) == 2) {
+      # Compute ROC curve for binary classification using pROC
+      roc_curve <- roc(predictions$Sensibilidad, predictions$pred.fit, 
+                       levels = unique_levels, 
+                        direction = "<")
+      auroc <- auc(roc_curve)
+      
+      # Store AUC in a dataframe
+      auc_row <- data.frame(
+        Description = description,
+        Medication = medication,
+        Class = "Binary",
+        AUC = round(auroc, 3)
+      )
+      
+      roc_df <- data.frame(
+          tpr = roc_curve$sensitivities,  # True Positive Rate
+        fpr = 1 - roc_curve$specificities,  # False Positive Rate
+        Class = paste(medication, "(AUC =", round(auroc, 3), ")")
+      )
+      
+      roc_auc_df <<- rbind(roc_auc_df, auc_row)
+      
+      roc_plot <- ggplot(roc_df, aes(x = fpr, y = tpr, color = Class)) +
+        geom_line() +
+        geom_abline(linetype = "dashed", color = "red") +
+        labs(
+          title = paste(description, "\n ROC curve for", medication),
+          x = "False Positive Rate",
+          y = "True Positive Rate",
+          color = "Class (with AUC)"
+        ) +
+        theme_minimal()
+
+      # Save the plot to a file
+      ggsave(filename = paste0(paste0("Imagenes", model, "/"), "ROC_", description, "_", medication, ".png"), 
+             plot = roc_plot, width = 8, height = 6, dpi = 300)
+
+    # Case 2: Multiclass Classification
+    } else {
+      combined_df <- data.frame()
+        for (level in unique_levels) {
+        roc_curve_class <- roc(predictions$Sensibilidad == level, 
+                               predictions$pred.fit, levels = c(F, T))
+        auc_value <- auc(roc_curve_class)
+
+        # Store AUC in a dataframe
+        auc_row <- data.frame(Description = description,
+                              Medication = medication,
+                              Class = paste(level),
+                              AUC = round(auc_value, 2)
+                            )
+        roc_auc_df <<- rbind(roc_auc_df, auc_row)
+        
+        # Create ROC data frame for each level
+        roc_df <- data.frame(tpr = roc_curve_class$sensitivities,
+                              fpr = 1 - roc_curve_class$specificities,
+                              Class = paste(level, "(AUC =", round(auc_value, 2), ")")
+                            )
+        combined_df <- rbind(combined_df,roc_df)
+        
+
+        }
+      roc_plot <- ggplot(combined_df, aes(x = fpr, y = tpr, color = Class)) +
+                            geom_line() +
+                            geom_abline(linetype = "dashed", color = "red") +
+                              labs(
+                              title = paste(description, "\n ROC curves"),
+                              x = "False Positive Rate",
+                              y = "True Positive Rate", 
+                              color = "Class (with AUC)"
+                            ) +
+                            theme_minimal()
+      ggsave(filename = paste0(paste0("Imagenes", model, "/"), "ROC_", description, "_", medication, "_", level, ".png"), 
+               plot = roc_plot, width = 8, height = 6, dpi = 300)
+  }
+}
+```
+
+# Generalizacion a todas las descripciones
+
+```{r}
+results_frame <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
+predictions <- list()
+confusions_matrices <- list()
+metricsglm <- list()
+
+for(i in descripciones){
+  data_Aux = data.train[ data.train$Descripción == i,] #Lista auxiliar en funcion del organismo
+  data_Aux_test = data.test[ data.test$Descripción == i,]
+  
+  if ( nrow(data_Aux) < 30 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
+    next;
+  }else{
+    results_frame[[i]] <- list()
+    for(j in medicamentos){ #Columnas correspondientes sensibilidad de cada medicamentos
+      
+        data_Aux_j <- data_Aux[!is.na(data_Aux[[j]]), ] #Quitamos filas sin sensibilidad de ese medicamento
+        
+        data_Aux_j_test <- data_Aux_test[!is.na(data_Aux_test[[j]]), ]
+        
+        dataAuxiliar <- data.frame( Sensibilidad = data_Aux_j[[j]], 
+                                    Sexo.del.Paciente= data_Aux_j$Sexo.del.Paciente,  
+                                    Edad.del.Paciente= scale(data_Aux_j$Edad.del.Paciente), 
+                                    IMC= scale(data_Aux_j$IMC))
+        
+        dataAuxiliar_test <- data.frame( Sensibilidad = data_Aux_j_test[[j]], 
+                                    Sexo.del.Paciente= data_Aux_j_test$Sexo.del.Paciente,  
+                                    Edad.del.Paciente= scale(data_Aux_j_test$Edad.del.Paciente), 
+                                    IMC= scale(data_Aux_j_test$IMC))
+  
+        if(nrow(dataAuxiliar_test) < 30){ #Si hay menos de 30 casos tambien obviamos el analisis
+           next;
+         }else {
+           if (length(unique(dataAuxiliar_test$Sensibilidad)) < 2) {
+            next  # Skip if there aren't enough levels to perform ROC analysis
+           }
+           
+            results <- glm(Sensibilidad ~ Sexo.del.Paciente + IMC + Edad.del.Paciente , 
+                           dataAuxiliar, family = quasi() ) #Modelo 
+            
+            glm_test <- predict(results, dataAuxiliar_test)
+            
+            quantiles <- quantile(glm_test, probs = c(0.35, 0.50))
+            corte1 <- quantiles[1]
+            corte2 <- quantiles[2] #Corte en el tercer cuantil 
+            
+            predictions[[i]][[j]] <- dataAuxiliar_test %>% 
+                          mutate(pred.fit = glm_test,
+                          predicted_class = case_when(
+                            pred.fit < corte1  ~ 1,
+                            pred.fit >= corte1 & pred.fit < corte2  ~ 2,
+                            pred.fit >= corte2  ~ 3
+                            ),
+                          correct = if_else( predicted_class == Sensibilidad, 'correct', 'incorrect')
+                          )
+            
+            # Construimos la  confusion matriX
+            
+            actual <- factor(predictions[[i]][[j]]$Sensibilidad, levels = c(1, 2, 3), 
+                             labels = c("Sensible", "Sensible EI", "Resistente"))
+            
+            predicted <- factor(predictions[[i]][[j]]$predicted_class, levels = c(1, 2, 3),
+                                labels = c("Sensible", "Sensible EI", "Resistente"))
+            
+            cm <- table(actual, predicted)     
+            
+            confusions_matrices[[i]][[j]] <- cm
+            
+            draw_confusion_matrix(cm, j , i, "glm" )
+            metricsglm[[i]][[j]] <- compute_metrics(cm, j)
+            computerocurve(predictions[[i]][[j]], i, "glm", j )
+        }
+    }
+    
+  }
+}
+```
+
+
+
+### Decision Trees
+
+
+```{r}
+results_trees <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
+metrics_trees <- list()
+trees_confusions_matrices <- list()
+
+for(i in descripciones){
+  data_Aux = data.train[ data.train$Descripción == i,] #Lista auxiliar en funcion del organismo
+  data_Aux_test = data.test[ data.test$Descripción == i,]
+  
+  if (nrow(data_Aux) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
+    next;
+  }else{
+    results_frame[[i]] <- list()
+    for(j in medicamentos){ #Columnas correspondientes sensibilidad de cada medicamentos
+        data_Aux_j <- data_Aux[!is.na(data_Aux[[j]]), ] # Quitamos filas sin sensibilidad de ese medicamento
+        
+        dataAuxiliar <- data.frame( Sensibilidad = data_Aux_j[[j]], 
+                                    Sexo.del.Paciente= as.factor(data_Aux_j$Sexo.del.Paciente),  
+                                    Edad.del.Paciente= scale(data_Aux_j$Edad.del.Paciente), 
+                                    IMC = scale(data_Aux_j$IMC))
+        
+        data_Aux_j_test <- data_Aux_test[!is.na(data_Aux_test[[j]]), ] # Quitamos filas sin sensibilidad de ese medicamento
+        
+        dataAuxiliar_test <- data.frame( Sensibilidad = data_Aux_j_test[[j]], 
+                                    Sexo.del.Paciente= as.factor(data_Aux_j_test$Sexo.del.Paciente),  
+                                    Edad.del.Paciente= scale(data_Aux_j_test$Edad.del.Paciente), 
+                                    IMC = scale(data_Aux_j_test$IMC))
+      
+        if( length(dataAuxiliar_test$IMC) < 30){ #Si hay menos de 10 casos tambien obviamos el analisis
+           next;
+         }else {
+            if (length(unique(dataAuxiliar_test$Sensibilidad)) < 2) {
+            next  # Skip if there aren't enough levels to perform ROC analysis
+            }
+          dataH2O_train <- as.h2o(dataAuxiliar)
+          
+          dataH2O_test <- as.h2o(dataAuxiliar_test)
+            
+          # Convert Sensibilidad and Sex to factor
+          dataH2O_train[["Sensibilidad"]] <- as.factor(dataH2O_train[["Sensibilidad"]])
+          dataH2O_train[["Sexo.del.Paciente"]] <- as.factor( dataH2O_train[["Sexo.del.Paciente"]])
+          
+          dataH2O_test[["Sensibilidad"]] <- as.factor(dataH2O_test[["Sensibilidad"]])
+          dataH2O_test[["Sexo.del.Paciente"]] <- as.factor( dataH2O_test[["Sexo.del.Paciente"]])
+          
+          response <- "Sensibilidad"
+          predictors <- c("Sexo.del.Paciente", "Edad.del.Paciente", "IMC")
+          
+          modelo_gbm <- h2o.gbm(
+                # Tipo de distribución (clasificación binaria)
+                distribution = "multinomial",
+                # Variable respuesta y predictores
+                y = response,
+                x = predictors,
+                # Datos de entrenamiento
+                training_frame = dataH2O_train,
+                # Datos de validación para estimar el error
+                validation_frame = dataH2O_test,
+                # Número de árboles
+                ntrees = 100,
+                # Complejidad de los árboles
+                max_depth = 3,
+                min_rows  = 10,
+                # Aprendizaje
+                learn_rate = 0.01,
+                # Detención temprana
+                score_tree_interval = 5,
+                stopping_rounds     = 3,
+                stopping_metric     = "AUC",
+                stopping_tolerance  = 0.001,
+                model_id = "modelo_gbm",
+                seed = 123
+              )
+  
+          #h2o.performance(model = modelo_gbm, newdata = datos_test_h2o)@metrics$AUC
+          predicted_class <- h2o.predict(modelo_gbm, dataH2O_test)
+        
+          # Convert predictions to R format
+          predictions_class <- as.data.frame(predicted_class)
+          
+          predictions[[i]][[j]] <- dataAuxiliar_test %>% 
+                          mutate( pred.fit = as.numeric(predictions_class$predict),
+                          predicted_class = as.integer(pred.fit),
+                          correct = if_else( predicted_class == Sensibilidad, 'correct', 'incorrect')
+                          )
+
+           
+            # Construimos la  confusion matriX
+            
+            actual <- factor(predictions[[i]][[j]]$Sensibilidad, levels = c(1, 2, 3), 
+                             labels = c("Sensible", "Sensible EI", "Resistente"))
+            
+            predicted <- factor(predictions[[i]][[j]]$predicted_class, levels = c(1, 2, 3), 
+                             labels = c("Sensible", "Sensible EI", "Resistente") )
+            
+            
+            cm <- table(actual, predicted)     
+            
+            trees_confusions_matrices[[i]][[j]] <- cm
+            
+            draw_confusion_matrix(cm, j, i ,"clasification_trees")
+            
+            metrics_trees[[i]][[j]] <- compute_metrics(cm, j)
+            
+            computerocurve(predictions[[i]][[j]], i,"clasification_trees", j)
+         }
+      }
+  }
+}
+```
+
+```{r}
+ #tree_model <- rpart(Sensibilidad ~ Edad.del.Paciente + Sexo.del.Paciente + IMC, data = dataAuxiliar)
+            
+            #results_trees[[i]][[j]]<- tree_model #Guardamos los resultados en una lista de listas
+            
+            #predictions_tree <- predict(tree_model, dataAuxiliar_test)
+            
+            #quantiles <- quantile(predictions_tree, probs =c(0.35, 0.50) )
+            #corte1 <- quantiles[1]
+            #corte2 <- quantiles[2] #Corte en el tercer cuantil 
+            
+            #predictions[[i]][[j]] <- dataAuxiliar_test %>% 
+            #              mutate(pred.fit = predictions_tree,
+            #              predicted_class = case_when(
+            ##                pred.fit < corte1  ~ 1,
+             #               pred.fit >= corte1 & pred.fit < corte2  ~ 2,
+             #               pred.fit >= corte2  ~ 3
+             #               ),
+             #             correct = if_else( predicted_class == Sensibilidad, 'correct', 'incorrect')
+             #             )
+            
+```
+
+
+
+# KNN model
+
+
+```{r}
+results_knn <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
+metrics_knn <- list()
+knn_confusions_matrices <- list()
+
+for(i in descripciones){
+  data_Aux = data.train[ data.train$Descripción == i,] #Lista auxiliar en funcion del organismo
+  data_Aux_test = data.test[ data.test$Descripción == i,]
+  
+  if (nrow(data_Aux) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
+    next;
+  }else{
+    results_frame[[i]] <- list()
+    for(j in medicamentos){ #Columnas correspondientes sensibilidad de cada medicamentos
+        data_Aux_j <- data_Aux[!is.na(data_Aux[[j]]), ] # Quitamos filas sin sensibilidad de ese medicamento
+        
+        dataAuxiliar <- data.frame( Sensibilidad = as.factor(data_Aux_j[[j]]), 
+                                    Sexo.del.Paciente= as.factor(data_Aux_j$Sexo.del.Paciente),  
+                                    Edad.del.Paciente= scale(data_Aux_j$Edad.del.Paciente), 
+                                    IMC = scale(data_Aux_j$IMC))
+        
+        data_Aux_j_test <- data_Aux_test[!is.na(data_Aux_test[[j]]), ] # Quitamos filas sin sensibilidad de ese medicamento
+        
+        dataAuxiliar_test <- data.frame( Sensibilidad = as.factor(data_Aux_j_test[[j]]), 
+                                    Sexo.del.Paciente= as.factor(data_Aux_j_test$Sexo.del.Paciente),  
+                                    Edad.del.Paciente= scale(data_Aux_j_test$Edad.del.Paciente), 
+                                    IMC = scale(data_Aux_j_test$IMC))
+      
+        if( length(dataAuxiliar_test$IMC) < 30){ #Si hay menos de 10 casos tambien obviamos el analisis
+           next;
+         }else {
+            if (length(unique(dataAuxiliar_test$Sensibilidad)) < 2) {
+            next  # Skip if there aren't enough levels to perform ROC analysis
+            }
+          # Convert to h2o objects
+          dataH2O_train <- as.h2o(dataAuxiliar)
+          dataH2O_test <- as.h2o(dataAuxiliar_test)
+            
+          # Convert Sensibilidad and Sex to factor
+          dataH2O_train[["Sensibilidad"]] <- as.factor(dataH2O_train[["Sensibilidad"]])
+          dataH2O_train[["Sexo.del.Paciente"]] <- as.factor( dataH2O_train[["Sexo.del.Paciente"]])
+          
+          dataH2O_test[["Sensibilidad"]] <- as.factor(dataH2O_test[["Sensibilidad"]])
+          dataH2O_test[["Sexo.del.Paciente"]] <- as.factor( dataH2O_test[["Sexo.del.Paciente"]])
+          
+          predictors <- c("Edad.del.Paciente", "IMC", "Sexo.del.Paciente")
+          response <- "Sensibilidad"
+            
+          
+          knn_model <- h2o.kmeans(training_frame = dataH2O_train, 
+                                    k = 3,  # You can adjust k based on your data
+                                    x = predictors,
+                                    seed = seed)
+          
+          predicted_class <- h2o.predict(knn_model, dataH2O_test)
+        
+          # Convert predictions to R format
+          predictions_class <- as.data.frame(predicted_class)
+          
+          predictions[[i]][[j]] <- dataAuxiliar_test %>% 
+                          mutate( pred.fit = as.numeric(predictions_class$predict),
+                          predicted_class = as.integer(pred.fit),
+                          correct = if_else( predicted_class == Sensibilidad, 'correct', 'incorrect')
+                          )
+            
+            # Construimos la  confusion matriX
+            
+            actual <- factor(predictions[[i]][[j]]$Sensibilidad, levels = c(1, 2, 3), 
+                             labels = c("Sensible", "Sensible EI", "Resistente"))
+            
+            predicted <- factor(predictions[[i]][[j]]$predicted_class, levels = c(1, 2, 3), 
+                             labels = c("Sensible", "Sensible EI", "Resistente") )
+            
+            
+            cm <- table(actual, predicted)     
+            
+            knn_confusions_matrices[[i]][[j]] <- cm
+            
+            draw_confusion_matrix(cm, j, i ,"knn")
+            
+            metrics_knn[[i]][[j]] <- compute_metrics(cm, j)
+            
+            computerocurve(predictions[[i]][[j]], i ,"knn", j)
+         }
+      }
+  }
+}
+```
+
+# Neural networks
+
+
+
+
+```{r}
+results_h2o_nn <- list()  #Actualizar para poder guardar con cada descripcion un lista de dataframes de medicamentos
+metrics_h2o_nn <- list()
+h2o_nn_confusions_matrices <- list()
+
+for(i in descripciones){
+  data_Aux = data.train[ data.train$Descripción == i,] #Lista auxiliar en funcion del organismo
+  data_Aux_test = data.test[ data.test$Descripción == i,]
+  
+  if (nrow(data_Aux) < 20 ){ #Filtramos para ver si hay cantidad suficiente de datos para hacer estadistica
+    next;
+  }else{
+    results_frame[[i]] <- list()
+    for(j in medicamentos){ #Columnas correspondientes sensibilidad de cada medicamentos
+        data_Aux_j <- data_Aux[!is.na(data_Aux[[j]]), ] # Quitamos filas sin sensibilidad de ese medicamento
+        
+        dataAuxiliar <- data.frame( Sensibilidad = data_Aux_j[[j]], 
+                                    Sexo.del.Paciente= data_Aux_j$Sexo.del.Paciente,  
+                                    Edad.del.Paciente= scale(data_Aux_j$Edad.del.Paciente), 
+                                    IMC = scale(data_Aux_j$IMC))
+        
+        data_Aux_j_test <- data_Aux_test[!is.na(data_Aux_test[[j]]), ] # Quitamos filas sin sensibilidad de ese medicamento
+        
+        dataAuxiliar_test <- data.frame( Sensibilidad = data_Aux_j_test[[j]], 
+                                    Sexo.del.Paciente= data_Aux_j_test$Sexo.del.Paciente,  
+                                    Edad.del.Paciente= scale(data_Aux_j_test$Edad.del.Paciente), 
+                                    IMC = scale(data_Aux_j_test$IMC))
+      
+        if( length(dataAuxiliar_test$IMC) < 30){ #Si hay menos de 10 casos tambien obviamos el analisis
+           next;
+         }else {
+            if (length(unique(dataAuxiliar_test$Sensibilidad)) < 2) {
+            next  # Skip if there aren't enough levels to perform ROC analysis
+            }
+           #To H2O frames
+          dataH2O_train <- as.h2o(dataAuxiliar)
+          dataH2O_test <- as.h2o(dataAuxiliar_test)
+          
+          # Convert Sensibilidad and Sex to factor
+          dataH2O_train[["Sensibilidad"]] <- as.factor(dataH2O_train[["Sensibilidad"]])
+          dataH2O_train[["Sexo.del.Paciente"]] <- as.factor( dataH2O_train[["Sexo.del.Paciente"]])
+          
+          dataH2O_test[["Sensibilidad"]] <- as.factor(dataH2O_test[["Sensibilidad"]])
+          dataH2O_test[["Sexo.del.Paciente"]] <- as.factor( dataH2O_test[["Sexo.del.Paciente"]])
+          
+          nn_model <- h2o.deeplearning(
+                      x = c("Edad.del.Paciente", "Sexo.del.Paciente", "IMC"),
+                      y = "Sensibilidad",
+                      training_frame = dataH2O_train,
+                      distribution = "multinomial",  # Sensibilidad is categorical
+                      standardize = TRUE,
+                      activation = "Rectifier",
+                      hidden = c(200, 200),
+                      loss = "CrossEntropy",
+                      stopping_rounds = 0,
+                      epochs = 50,
+                      seed = seed,
+                      model_id = paste0("nn_model_", i, "_", j)
+                    )
+    
+          results_h2o_nn[[i]][[j]]<- nn_model #Guardamos los resultados en una lista de listas
+          
+          predicted_nn <- h2o.predict(nn_model,  dataH2O_test)
+          
+          predicted_df <- as.data.frame(predicted_nn)
+          predicted_class <- as.data.frame(predicted_nn)$predict
+          
+          pred_class_probs <- numeric(nrow(predicted_df))
+    
+          # Loop through the predicted classes and extract the corresponding probability
+          for (k in 1:nrow(predicted_df)) {
+            # Construct the probability column name dynamically based on the predicted class
+            prob_col_name <- paste0("p", predicted_class[k])
+            
+            # Save the corresponding probability for each row
+            pred_class_probs[k] <- predicted_df[k, prob_col_name]
+          }
+          
+          predictions[[i]][[j]] <- dataAuxiliar_test %>% 
+                          mutate( pred.fit = pred_class_probs,
+                          predicted_class =predicted_class,
+                          correct = if_else( predicted_class == Sensibilidad, 'correct', 'incorrect')
+                          )
+            
+          # Construimos la  confusion matriX
+            
+          actual <- factor(predictions[[i]][[j]]$Sensibilidad, levels = c(1, 2, 3), 
+                             labels = c("Sensible", "Sensible EI", "Resistente"))
+            
+          predicted <- factor(predictions[[i]][[j]]$predicted_class, levels = c(1, 2, 3), 
+                             labels = c("Sensible", "Sensible EI", "Resistente") )
+            
+            
+          cm <- table(actual, predicted)     
+            
+          h2o_nn_confusions_matrices[[i]][[j]] <- cm
+            
+          draw_confusion_matrix(cm, j,i ,"nn")
+            
+          metrics_h2o_nn[[i]][[j]] <- compute_metrics(cm, j)
+            
+          computerocurve(predictions[[i]][[j]], i,"nn", j)
+         }
+      }
+  }
+}
+```
+## Tables for Latex
+
+
+```{r}
+combined_data_glm <- do.call(rbind, lapply(names(metricsglm[["Staphylococcus epidermidis"]]), function(drug) {
+  df <- metricsglm[["Staphylococcus epidermidis"]][[drug]]
+  df$Drug <- drug
+  return(df)
+}))
+
+# Calculate the mean for each metric type (Precision, Recall, etc.) across all drugs
+mean_precision <- colMeans(combined_data[combined_data$Metric == "Precision", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_recall <- colMeans(combined_data[combined_data$Metric == "Recall", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_f1_score <- colMeans(combined_data[combined_data$Metric == "F1 Score", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_accuracy <- colMeans(combined_data[combined_data$Metric == "Accuracy", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_kappa <- colMeans(combined_data[combined_data$Metric == "Cohen's Kappa", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+
+# Create a data frame for the mean values
+mean_values <- data.frame(
+  Metric = c("Precision", "Recall", "F1 Score", "Accuracy", "Cohen's Kappa"),
+  Macro = c(mean_precision["Macro"], mean_recall["Macro"], mean_f1_score["Macro"], mean_accuracy["Macro"], mean_kappa["Macro"]),
+  Micro = c(mean_precision["Micro"], mean_recall["Micro"], mean_f1_score["Micro"], mean_accuracy["Micro"], mean_kappa["Micro"]),
+  Weighted = c(mean_precision["Weighted"], mean_recall["Weighted"], mean_f1_score["Weighted"], mean_accuracy["Weighted"], mean_kappa["Weighted"]),
+  Drug = "Overall"
+)
+
+# Add the mean row to the combined data
+combined_data <- rbind(combined_data, mean_values)
+
+print(xtable(combined_data, caption = "Performance Metrics by Drug", label = "tab:metrics", align = c("l", "l", "r", "r", "r", "l")),
+      include.rownames = FALSE, caption.placement = "top", booktabs = TRUE)
+```
+```{r}
+combined_data_tree <- do.call(rbind, lapply(names(metrics_trees[["Staphylococcus epidermidis"]]), function(drug) {
+  df <- metrics_trees[["Staphylococcus epidermidis"]][[drug]]
+  df$Drug <- drug
+  return(df)
+}))
+
+# Calculate the mean for each metric type (Precision, Recall, etc.) across all drugs
+mean_precision <- colMeans(combined_data_tree[combined_data_tree$Metric == "Precision", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_recall <- colMeans(combined_data_tree[combined_data_tree$Metric == "Recall", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_f1_score <- colMeans(combined_data_tree[combined_data_tree$Metric == "F1 Score", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_accuracy <- colMeans(combined_data_tree[combined_data_tree$Metric == "Accuracy", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_kappa <- colMeans(combined_data_tree[combined_data_tree$Metric == "Cohen's Kappa", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+
+# Create a data frame for the mean values
+mean_values <- data.frame(
+  Metric = c("Precision", "Recall", "F1 Score", "Accuracy", "Cohen's Kappa"),
+  Macro = c(mean_precision["Macro"], mean_recall["Macro"], mean_f1_score["Macro"], mean_accuracy["Macro"], mean_kappa["Macro"]),
+  Micro = c(mean_precision["Micro"], mean_recall["Micro"], mean_f1_score["Micro"], mean_accuracy["Micro"], mean_kappa["Micro"]),
+  Weighted = c(mean_precision["Weighted"], mean_recall["Weighted"], mean_f1_score["Weighted"], mean_accuracy["Weighted"], mean_kappa["Weighted"]),
+  Drug = "Overall"
+)
+
+# Add the mean row to the combined data
+combined_data_tree <- rbind(combined_data_tree, mean_values)
+
+print(xtable(combined_data_tree, caption = "Performance Metrics by Drug", label = "tab:metrics", align = c("l", "l", "r", "r", "r", "l")),
+      include.rownames = FALSE, caption.placement = "top", booktabs = TRUE)
+```
+
+
+
+```{r}
+combined_data_knn <- do.call(rbind, lapply(names(metrics_knn[["Staphylococcus epidermidis"]]), function(drug) {
+  df <- metrics_knn[["Staphylococcus epidermidis"]][[drug]]
+  df$Drug <- drug
+  return(df)
+}))
+
+# Calculate the mean for each metric type (Precision, Recall, etc.) across all drugs
+mean_precision_knn <- colMeans(combined_data_knn[combined_data_knn$Metric == "Precision", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_recall_knn <- colMeans(combined_data_knn[combined_data_knn$Metric == "Recall", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_f1_score_knn <- colMeans(combined_data_knn[combined_data_knn$Metric == "F1 Score", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_accuracy_knn <- colMeans(combined_data_knn[combined_data_knn$Metric == "Accuracy", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_kappa_knn <- colMeans(combined_data_knn[combined_data_knn$Metric == "Cohen's Kappa", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+
+# Create a data frame for the mean values
+mean_values <- data.frame(
+  Metric = c("Precision", "Recall", "F1 Score", "Accuracy", "Cohen's Kappa"),
+  Macro = c(mean_precision["Macro"], mean_recall["Macro"], mean_f1_score["Macro"], mean_accuracy["Macro"], mean_kappa["Macro"]),
+  Micro = c(mean_precision["Micro"], mean_recall["Micro"], mean_f1_score["Micro"], mean_accuracy["Micro"], mean_kappa["Micro"]),
+  Weighted = c(mean_precision["Weighted"], mean_recall["Weighted"], mean_f1_score["Weighted"], mean_accuracy["Weighted"], mean_kappa["Weighted"]),
+  Drug = "Overall"
+)
+
+# Add the mean row to the combined data
+combined_data_knn <- rbind(combined_data_knn, mean_values)
+
+print(xtable(combined_data_knn, caption = "Performance Metrics by Drug", label = "tab:metrics", align = c("l", "l", "r", "r", "r", "l")),
+      include.rownames = FALSE, caption.placement = "top", booktabs = TRUE)
+```
+
+
+```{r}
+combined_data_nn <- do.call(rbind, lapply(names(metrics_h2o_nn[["Staphylococcus epidermidis"]]), function(drug) {
+  df <- metrics_h2o_nn[["Staphylococcus epidermidis"]][[drug]]
+  df$Drug <- drug
+  return(df)
+}))
+
+# Calculate the mean for each metric type (Precision, Recall, etc.) across all drugs
+mean_precision <- colMeans(combined_data_nn[combined_data_nn$Metric == "Precision", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_recall <- colMeans(combined_data_nn[combined_data_nn$Metric == "Recall", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_f1_score <- colMeans(combined_data_nn[combined_data_nn$Metric == "F1 Score", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_accuracy <- colMeans(combined_data_nn[combined_data_nn$Metric == "Accuracy", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+mean_kappa <- colMeans(combined_data_nn[combined_data_nn$Metric == "Cohen's Kappa", c("Macro", "Micro", "Weighted")], na.rm = TRUE)
+
+# Create a data frame for the mean values
+mean_values <- data.frame(
+  Metric = c("Precision", "Recall", "F1 Score", "Accuracy", "Cohen's Kappa"),
+  Macro = c(mean_precision["Macro"], mean_recall["Macro"], mean_f1_score["Macro"], mean_accuracy["Macro"], mean_kappa["Macro"]),
+  Micro = c(mean_precision["Micro"], mean_recall["Micro"], mean_f1_score["Micro"], mean_accuracy["Micro"], mean_kappa["Micro"]),
+  Weighted = c(mean_precision["Weighted"], mean_recall["Weighted"], mean_f1_score["Weighted"], mean_accuracy["Weighted"], mean_kappa["Weighted"]),
+  Drug = "Overall"
+)
+
+# Add the mean row to the combined data
+combined_data_nn <- rbind(combined_data_nn, mean_values)
+
+print(xtable(combined_data_nn, caption = "Performance Metrics by Drug using neural networks", label = "tab:metrics_nn", align = c("l", "l", "r", "r", "r", "l")),
+      include.rownames = FALSE, caption.placement = "top", booktabs = TRUE)
+```
+
+```{r}
+h2o.shutdown(prompt = FALSE)
+```
+
